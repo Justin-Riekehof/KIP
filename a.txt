@@ -1,0 +1,1 @@
+alright, i will now connect a usb mic, then i can keep the code unchanged, right? maybe it would be good to create a simple tkinter gui in which all available mic devices are shown and can be selected in a dropdown. the selected input device's signals are then shown in a loudness bar for sound check reasons, if that is possible in tkinter
