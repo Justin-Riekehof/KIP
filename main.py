@@ -149,30 +149,56 @@ def diarize_speakers(audio_path):
         raise RuntimeError(f"Pyannote-Pipeline-Verzeichnis nicht gefunden: {PYANNOTE_DIR}")
 
     print(f"Lade pyannote-Pipeline aus: {PYANNOTE_DIR}")
-
     pipeline = Pipeline.from_pretrained(PYANNOTE_DIR)
 
-    # WAV manuell laden (um torchcodec/AudioDecoder zu umgehen)
+    # WAV manuell laden
     with wave.open(audio_path, "rb") as wf:
         sample_rate = wf.getframerate()
         n_channels = wf.getnchannels()
         n_frames = wf.getnframes()
         audio_bytes = wf.readframes(n_frames)
 
+    # int16 -> float32 in [-1, 1]
     audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32767.0
 
     if n_channels > 1:
-        audio_np = audio_np.reshape(-1, n_channels).T
-        audio_np = audio_np[0:1, :]
+        # (num_frames, n_channels)
+        audio_np = audio_np.reshape(-1, n_channels)
+        # auf Mono mitteln: (num_frames,)
+        audio_np = audio_np.mean(axis=1)
     else:
-        audio_np = audio_np[None, :]
+        # Mono: haben bereits (num_frames,)
+        pass
 
-    waveform = torch.from_numpy(audio_np)
+    # Jetzt Mono 1D: (num_frames,)
+    # pyannote will (channel, time) -> (1, num_frames)
+    waveform = torch.from_numpy(audio_np).unsqueeze(0)
 
     print("Starte Diarisierung...")
+    print(f"waveform.shape = {waveform.shape}, sample_rate = {sample_rate}")
+
+    # Pipeline aufrufen
     output = pipeline({"waveform": waveform, "sample_rate": sample_rate})
 
-    diarization = output.speaker_diarization
+    print(f"Pipeline-Output-Typ: {type(output)}")
+
+    # Verschiedene mögliche Output-Formate abfangen
+    if hasattr(output, "itertracks"):
+        # Klassischer Fall: direkt ein Diarization-Objekt
+        diarization = output
+    elif hasattr(output, "speaker_diarization"):
+        diarization = output.speaker_diarization
+    elif isinstance(output, dict):
+        # Falls es ein Dict ist, versuchen sinnvolle Keys
+        diarization = (
+            output.get("speaker_diarization")
+            or output.get("diarization")
+            or output.get("annotation")
+        )
+        if diarization is None:
+            raise RuntimeError(f"Unbekanntes Pipeline-Output-Format: Keys = {list(output.keys())}")
+    else:
+        raise RuntimeError(f"Unbekanntes Pipeline-Output-Format: Typ = {type(output)}")
 
     segments = []
     for turn, _, speaker in diarization.itertracks(yield_label=True):
